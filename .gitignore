@@ -1,19 +1,27 @@
-# 忽略 Python 编译产生的缓存文件
+# 1. 忽略 Python 编译产生的缓存文件
 __pycache__/
 *.py[cod]
 *$py.class
 
-# 忽略模型训练产生的巨大权重文件
+# 2. 忽略模型训练产生的巨大权重文件及文件夹
 *.pth
 *.pt
 *.pkl
 *.h5
+checkpoints/
+checkpoints_finetune/
 
-# 忽略日志和缓存
+# 3. 忽略日志和IDE缓存
 .idea/
 .vscode/
 *.log
 
-# 忽略未来存放在 data 文件夹下的大容量数据集
+# 4. 忽略大容量数据集 
 data/*
 !data/.gitkeep
+raw_data/
+
+# 5. 忽略代码生成的临时可视化图片
+*.png
+*.jpg
+*.jpeg

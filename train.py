@@ -1,68 +1,116 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-# 导入写好的 Dataset 和 Model
+# 导入数据集和完整的 SC-Net 模型
 from dataset import AerialImageDataset
-from models.sc_net import SCNetFeatureExtractor
+from models.sc_net import SCNet
+
+def generate_grid(batch_size, device, step=0.1):
+    """生成均匀分布在 -1 到 1 之间的网格点"""
+    x = torch.arange(-1.0, 1.0 + step, step, device=device)
+    y = torch.arange(-1.0, 1.0 + step, step, device=device)
+    grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
+    
+    num_points = grid_x.numel()
+    ones = torch.ones(num_points, device=device)
+    grid = torch.stack([grid_x.flatten(), grid_y.flatten(), ones], dim=0)
+    grid = grid.unsqueeze(0).repeat(batch_size, 1, 1)
+    return grid
+
+def grid_distance_loss(pred_theta, gt_theta, grid):
+    """计算变换后的网格距离损失"""
+    B = pred_theta.shape[0]
+    pred_matrix = pred_theta.view(B, 2, 3)
+    gt_matrix = gt_theta.view(B, 2, 3)
+    
+    pred_points = torch.bmm(pred_matrix, grid)
+    gt_points = torch.bmm(gt_matrix, grid)
+    
+    loss = nn.functional.mse_loss(pred_points, gt_points)
+    return loss
 
 def main():
-    print("--- 初始化训练大流程测试 ---")
+    print("--- 启动 SC-Net 高精度微调 (Fine-tuning) 训练 ---")
     
-    # 1. 硬件设备配置：自动检测 RTX 3090 (CUDA)
+    save_dir = "./checkpoints_finetune"
+    os.makedirs(save_dir, exist_ok=True)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"当前使用的计算设备: {device}")
+    print(f"当前计算设备: {device}")
 
-    # 2. 数据加载器 (DataLoader) 配置
-    # 论文中指定的批大小为 8[cite: 1]
+    # 1. 实例化数据集与 DataLoader
+    train_dataset = AerialImageDataset(image_dir="./data/train")
+    train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    
+    print(f"成功加载训练集，共计 {len(train_dataset)} 张图像。")
+    
+    # 2. 实例化完整的 SC-Net 模型
+    model = SCNet(pretrained=True).to(device)
+    
+    checkpoint_path = "./checkpoints/scnet_epoch_25.pth"
+    if os.path.exists(checkpoint_path):
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        print(f" 成功加载预训练权重: {checkpoint_path}\n在此基础上开启高精度微调！")
+    else:
+        print(f" 未找到权重文件 {checkpoint_path}，请检查路径或文件名！")
+        return
 
-    dataset = AerialImageDataset(image_dir="./data")
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+    model.train()
     
-    # 3. 模型实例化并移动到 GPU
-    model = SCNetFeatureExtractor(pretrained=True).to(device)
-    model.train() # 设置为训练模式
+    # 3. 优化器配置
+    # 将初始学习率降低 10 倍，从 0.0005 降为 0.00005
+    optimizer = optim.AdamW(model.parameters(), lr=0.00005)
     
-    # 4. 优化器配置
-    # 严格按照论文参数：AdamW 优化器，学习率 0.0005[cite: 1]
-    optimizer = optim.AdamW(model.parameters(), lr=0.0005)
+    # 引入学习率衰减调度器
+    # step_size=5 表示每训练 5 轮触发一次衰减
+    # gamma=0.5 表示每次触发时，将当前学习率乘以 0.5（即减半）
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     
-    # 5. 训练循环
-    # 论文设定训练 90 个 Epoch[cite: 1]，这里为了测试大流程，只跑 2 个 Epoch
-    num_epochs = 2
+    # 4. 正式微调训练循环
+    # 微调阶段设定为 20 轮
+    num_epochs = 20
+    
     for epoch in range(num_epochs):
-        print(f"\n开始第 {epoch+1}/{num_epochs} 轮训练...")
+        epoch_loss = 0.0
         
-        for batch_idx, (source_img, target_img, affine_gt) in enumerate(dataloader):
-            # 将数据推送到 GPU
+        # 获取当前 Epoch 的学习率以便在终端观察调度器的工作状态
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"\n开始 Epoch [{epoch+1}/{num_epochs}] | 当前学习率: {current_lr:.7f}")
+        
+        for batch_idx, (source_img, target_img, affine_gt) in enumerate(train_dataloader):
             source_img = source_img.to(device)
             target_img = target_img.to(device)
-            affine_gt = affine_gt.to(device)
+            affine_gt = affine_gt.to(device).float()
             
-            # 步骤 A: 梯度清零
             optimizer.zero_grad()
+            pred_theta = model(source_img, target_img)
             
-            # 步骤 B: 前向传播 (Forward)
-            F_s, F_t = model(source_img, target_img)
+            current_batch_size = source_img.shape[0]
+            grid = generate_grid(current_batch_size, device)
+            loss = grid_distance_loss(pred_theta, affine_gt, grid)
             
-            # 【临时测试逻辑】
-            # 因为目前网络还没有加上最后的回归层，无法直接和 affine_gt (真实 6 参数) 计算损失。
-            # 为了测试整个管道的反向传播能否成功，我们临时做一个假损失 (Fake Loss)。
-            # 即强行计算两个特征图的均方差，迫使模型进行权重更新。
-            loss_fn = nn.MSELoss()
-            fake_loss = loss_fn(F_s, F_t)
-            
-            # 步骤 C: 反向传播 (Backward)
-            fake_loss.backward()
-            
-            # 步骤 D: 参数更新
+            loss.backward()
             optimizer.step()
             
-            print(f"  Batch {batch_idx+1} | 成功完成前向与反向传播！临时 Fake Loss: {fake_loss.item():.4f}")
-            print(f"  -> 提取的源特征图 F_s 形状: {F_s.shape}")
-
-    print("\n--- 大流程测试圆满成功！---")
+            epoch_loss += loss.item()
+            
+            if (batch_idx + 1) % 100 == 0:
+                print(f"  Batch [{batch_idx+1}/{len(train_dataloader)}] | Loss: {loss.item():.6f}")
+        
+        # 每个 Epoch 结束后，调用 step() 让调度器更新学习率
+        scheduler.step()
+        
+        avg_epoch_loss = epoch_loss / len(train_dataloader)
+        print(f"-> Epoch [{epoch+1}/{num_epochs}] 平均 Loss: {avg_epoch_loss:.6f}")
+        
+        # 5. 保存模型权重
+        # 保存文件加上 finetune_ 前缀
+        save_path = os.path.join(save_dir, f"finetune_epoch_{epoch+1}.pth")
+        torch.save(model.state_dict(), save_path)
+        print(f"已保存微调权重至: {save_path}\n" + "-"*40)
 
 if __name__ == "__main__":
     main()
