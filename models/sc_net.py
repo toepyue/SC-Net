@@ -10,32 +10,26 @@ class SpatialContextEncoder(nn.Module):
     def __init__(self, channels, k=3):
         super(SpatialContextEncoder, self).__init__()
         self.k = k
-        # 经过 3x3 邻域点乘后，会多出 k*k = 9 个维度的空间相似性描述符
-        # 将局部特征 (channels) 和空间描述符 (9) 拼接后，再通过 1x1 卷积变回 channels 维度
         self.transform = nn.Sequential(
             nn.Conv2d(channels + k * k, channels, kernel_size=1),
             nn.ReLU(inplace=True)
         )
 
     def forward(self, F_local):
-        """
-        F_local: 局部特征图，形状为 (B, C, H, W)
-        """
         B, C, H, W = F_local.shape
         pad = self.k // 2
         
-        # 1. 边缘零填充，保证边界点也有完整的 3x3 邻域
+        # 边缘零填充，确保边缘点存在 k*k 区域[cite: 3]
         F_pad = F.pad(F_local, (pad, pad, pad, pad), mode='constant', value=0)
         
-        # 2. 提取 3x3 邻域特征 (利用 unfold)
         unfolded = F.unfold(F_pad, kernel_size=self.k, padding=0)
         unfolded = unfolded.view(B, C, self.k * self.k, H, W)
         
-        # 3. 计算自相似性 (Self-similarity): 核心像素与 3x3 邻域的点乘
+        # 计算空间上下文描述符自相似性[cite: 3]
         F_center = F_local.unsqueeze(2)  
         S_tilde = (F_center * unfolded).sum(dim=1) 
         
-        # 4. 拼接并进行非线性变换
+        # 将空间信息与局部特征连接后，应用非线性变换[cite: 3]
         concat_feat = torch.cat([S_tilde, F_local], dim=1)
         S_spatial = self.transform(concat_feat)
         
@@ -45,33 +39,30 @@ class SpatialContextEncoder(nn.Module):
 class SelectiveFusion(nn.Module):
     def __init__(self, channels):
         super(SelectiveFusion, self).__init__()
-        # 利用 1x1 卷积代替全连接层来处理空间特征图，降低计算量
         self.fc1 = nn.Conv2d(channels, channels // 4, kernel_size=1)
         self.fc2 = nn.Conv2d(channels // 4, channels * 2, kernel_size=1)
         
     def forward(self, F_local, S_spatial):
         B, C, H, W = F_local.shape
         
-        # 1. 元素级相加融合 (Fuse)
+        # 逐元素求和策略进行融合以减少冗余[cite: 3]
         U = F_local + S_spatial
         
-        # 2. 挤压 (Squeeze): 全局平均池化 (GAP)
+        # 采用全局平均池化策略 (GAP) 来压缩空间获取全局感受野[cite: 3]
         G = F.adaptive_avg_pool2d(U, (1, 1)) 
         
-        # 3. 选择 (Select): 通过两层网络计算权重
+        # 送入全连接层减少维度，再还原得到 A 和 B[cite: 3]
         Z = self.fc2(F.relu(self.fc1(G))) 
-        
-        # 拆分为 A 和 B 两部分
         A, B = torch.chunk(Z, 2, dim=1)
         
-        # 拼接在一起以在特征维度上做 SoftMax 保证 A+B=1
+        # 通过 SoftMax 层实现选择，确保 Ac + Bc = 1[cite: 3]
         attention = torch.cat([A.unsqueeze(1), B.unsqueeze(1)], dim=1) 
         attention = F.softmax(attention, dim=1)
         
         A_weight = attention[:, 0, :, :, :] 
         B_weight = attention[:, 1, :, :, :] 
         
-        # 4. 加权输出
+        # 计算 Vc = Ac * Fc + Bc * Sc[cite: 3]
         V = A_weight * F_local + B_weight * S_spatial
         return V
 
@@ -80,16 +71,13 @@ class SCNetFeatureExtractor(nn.Module):
     def __init__(self, pretrained=True):
         super(SCNetFeatureExtractor, self).__init__()
         
-        # 1. 主干网络: ResNet-101
+        # 选择 ResNet-101 作为骨干网络[cite: 3]
         resnet101 = models.resnet101(pretrained=pretrained)
         self.backbone = nn.Sequential(*list(resnet101.children())[:-2])
         
         channels = 2048
         
-        # 2. 空间信息编码器
         self.spatial_encoder = SpatialContextEncoder(channels=channels, k=3)
-        
-        # 3. 选择性特征融合
         self.selective_fusion = SelectiveFusion(channels=channels)
         
     def forward_once(self, x):
@@ -108,15 +96,13 @@ class LightweightNeighbourhoodConsensus(nn.Module):
     def __init__(self):
         super(LightweightNeighbourhoodConsensus, self).__init__()
         
-        # 1. 稀疏 4D 邻域一致性滤波器
-        # 包含三层 4D 稀疏卷积，核大小均为 5
+        # 稀疏邻域共识滤波器：三层四维稀疏卷积层，5*5*5*5卷积核[cite: 3]
         self.sparse_conv1 = ME.MinkowskiConvolution(in_channels=1, out_channels=16, kernel_size=5, dimension=4)
         self.sparse_conv2 = ME.MinkowskiConvolution(in_channels=16, out_channels=16, kernel_size=5, dimension=4)
         self.sparse_conv3 = ME.MinkowskiConvolution(in_channels=16, out_channels=1, kernel_size=5, dimension=4)
         self.relu = ME.MinkowskiReLU(inplace=True)
         
-        # 2. 稠密 2D 邻域一致性滤波器
-        # 接收 4D 稀疏网络输出并 reshape 后的稠密张量
+        # 稠密邻域共识滤波器：三层二维卷积层 (11*11, 7*7, 5*5)[cite: 3]
         self.dense_filter = nn.Sequential(
             nn.Conv2d(1, 225, kernel_size=11, padding=5),
             nn.BatchNorm2d(225),
@@ -131,48 +117,62 @@ class LightweightNeighbourhoodConsensus(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-    def extract_sparse_tensor(self, V_s, V_t, m=10):
+    def extract_asymmetric_sparse_tensor(self, V_s, V_t, m=10):
         """
-        计算余弦相似度，提取 top m 个匹配，并构建 Minkowski 稀疏张量
+        🌟 核心改进：严格复现论文中的非对称匹配矩阵 C_ST = C_S->T + C_T->S 🌟
         """
         B, C, H, W = V_s.shape
-        
-        # 将特征图归一化，以便通过点乘直接计算余弦相似度
-        vs_flat = F.normalize(V_s.view(B, C, -1), p=2, dim=1) # (B, C, H*W)
-        vt_flat = F.normalize(V_t.view(B, C, -1), p=2, dim=1) # (B, C, H*W)
-        
-        # 计算相关性矩阵 (B, H*W, H*W)
-        sim = torch.bmm(vs_flat.transpose(1, 2), vt_flat)
-        
-        # 提取 top m=10 的匹配，稀疏化存储
-        top_m_vals, top_m_indices = torch.topk(sim, m, dim=2)
-        
-        # 构建 Minkowski 坐标: [batch_idx, x_s, y_s, x_t, y_t]
-        coordinates = []
-        features = []
-        
-        for b in range(B):
-            for i in range(H * W): 
-                y_s, x_s = i // W, i % W
-                for j in range(m): 
-                    match_idx = top_m_indices[b, i, j].item()
-                    y_t, x_t = match_idx // W, match_idx % W
-                    
-                    coordinates.append([b, x_s, y_s, x_t, y_t])
-                    features.append([top_m_vals[b, i, j].item()])
-                    
-        # 转换为张量，指定设备
+        N = H * W
         device = V_s.device
-        coords_tensor = torch.IntTensor(coordinates).to(device)
-        feats_tensor = torch.FloatTensor(features).to(device)
         
-        # 构建并返回稀疏张量 (4D 维度)
-        sparse_tensor = ME.SparseTensor(features=feats_tensor, coordinates=coords_tensor)
+        vs_flat = F.normalize(V_s.view(B, C, -1), p=2, dim=1) 
+        vt_flat = F.normalize(V_t.view(B, C, -1), p=2, dim=1) 
+
+        # -----------------------------------------------------
+        # 1. 计算 S -> T 的稀疏相关矩阵[cite: 3]
+        # -----------------------------------------------------
+        sim_st = torch.bmm(vs_flat.transpose(1, 2), vt_flat)
+        val_st, idx_st = torch.topk(sim_st, m, dim=2)
+        
+        b_idx = torch.arange(B, device=device).view(B, 1, 1).expand(B, N, m).flatten()
+        src_idx_st = torch.arange(N, device=device).view(1, N, 1).expand(B, N, m).flatten()
+        dst_idx_st = idx_st.flatten()
+        
+        y_s_st, x_s_st = src_idx_st // W, src_idx_st % W
+        y_t_st, x_t_st = dst_idx_st // W, dst_idx_st % W
+        
+        coords_st = torch.stack([b_idx, x_s_st, y_s_st, x_t_st, y_t_st], dim=1).int()
+        feats_st = val_st.flatten().unsqueeze(1).float()
+
+        # -----------------------------------------------------
+        # 2. 计算 T -> S 的稀疏相关矩阵 (顺序反转)[cite: 3]
+        # -----------------------------------------------------
+        sim_ts = torch.bmm(vt_flat.transpose(1, 2), vs_flat)
+        val_ts, idx_ts = torch.topk(sim_ts, m, dim=2)
+        
+        src_idx_ts = torch.arange(N, device=device).view(1, N, 1).expand(B, N, m).flatten()
+        dst_idx_ts = idx_ts.flatten()
+        
+        # 注意：此处源是 T，目标是 S，要将其映射回相同的 [x_s, y_s, x_t, y_t] 坐标系
+        y_t_ts, x_t_ts = src_idx_ts // W, src_idx_ts % W
+        y_s_ts, x_s_ts = dst_idx_ts // W, dst_idx_ts % W
+        
+        coords_ts = torch.stack([b_idx, x_s_ts, y_s_ts, x_t_ts, y_t_ts], dim=1).int()
+        feats_ts = val_ts.flatten().unsqueeze(1).float()
+
+        # -----------------------------------------------------
+        # 3. 将两个相关张量加在一起，实现不对称性[cite: 3]
+        # ME.SparseTensor 默认会将相同坐标 (Coordinates) 的特征 (Features) 进行求和
+        # -----------------------------------------------------
+        coords_combined = torch.cat([coords_st, coords_ts], dim=0)
+        feats_combined = torch.cat([feats_st, feats_ts], dim=0)
+        
+        sparse_tensor = ME.SparseTensor(features=feats_combined, coordinates=coords_combined)
         return sparse_tensor
 
     def forward(self, V_s, V_t):
-        # A. 生成稀疏相关张量 (源到目标)
-        sparse_input = self.extract_sparse_tensor(V_s, V_t, m=10)
+        # A. 生成非对称稀疏相关张量
+        sparse_input = self.extract_asymmetric_sparse_tensor(V_s, V_t, m=10)
         
         # B. 稀疏 4D 卷积滤波
         x = self.relu(self.sparse_conv1(sparse_input))
@@ -199,34 +199,24 @@ class SCNet(nn.Module):
     def __init__(self, pretrained=True):
         super(SCNet, self).__init__()
         
-        # 1. 特征提取层
         self.feature_extractor = SCNetFeatureExtractor(pretrained=pretrained)
-        
-        # 2. 邻域一致性滤波层
         self.consensus_module = LightweightNeighbourhoodConsensus()
         
-        # 3. 参数回归层：基于置信度得分回归仿射变换的 6 个参数[cite: 1]
+        # 参数回归：使用全连接层来进行参数回归来获取仿射变换[cite: 3]
         self.regression = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1), # 全局池化，抹平空间维度
+            nn.AdaptiveAvgPool2d(1), 
             nn.Flatten(),
             nn.Linear(64, 32),
             nn.ReLU(inplace=True),
-            nn.Linear(32, 6)         # 输出 a1, a2, tx, a3, a4, ty[cite: 1]
+            nn.Linear(32, 6)         
         )
         
-        # 初始化技巧：为了防止初始训练时产生剧烈形变导致梯度爆炸，
-        # 我们将回归层初始输出设为单位矩阵参数 [1, 0, 0, 0, 1, 0]
         self.regression[-1].weight.data.zero_()
         self.regression[-1].bias.data.copy_(torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]))
 
     def forward(self, source_img, target_img):
-        # A. 提取局部+空间选择性融合特征
         V_s, V_t = self.feature_extractor(source_img, target_img)
-        
-        # B. 提取一致性匹配信息
         consensus_out = self.consensus_module(V_s, V_t)
-        
-        # C. 回归 6 个几何变换参数
         theta = self.regression(consensus_out)
         
         return theta
@@ -234,17 +224,13 @@ class SCNet(nn.Module):
 
 # --- 单元测试代码 ---
 if __name__ == "__main__":
-    print("开始测试端到端 SC-Net 完整网络...")
-    # 测试时设为False加快实例化速度
+    print("开始测试端到端 SC-Net 完整网络 (非对称匹配增强版)...")
     model = SCNet(pretrained=False).cuda() 
     
-    # 模拟输入：Batch Size 为 2，3 通道 RGB，尺寸 400x400
     dummy_source = torch.randn(2, 3, 400, 400).cuda()
     dummy_target = torch.randn(2, 3, 400, 400).cuda()
     
-    # 执行前向传播
     predicted_theta = model(dummy_source, dummy_target)
     
     print("前向传播圆满成功！")
     print(f"预测的仿射变换参数 theta 形状: {predicted_theta.shape}")
-    print(f"参数输出预览: \n{predicted_theta.cpu().detach().numpy()}")

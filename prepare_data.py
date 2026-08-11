@@ -5,7 +5,7 @@ import shutil
 def prepare_and_split_aid_dataset(source_base_dir, target_base_dir):
     print("开始执行数据集扁平化与严格划分任务...")
     
-    # 论文中明确要求的比例与数量[cite: 1]
+    # 论文中明确要求的比例与数量
     num_train = 9000
     num_val = 500
     num_test = 500
@@ -30,12 +30,15 @@ def prepare_and_split_aid_dataset(source_base_dir, target_base_dir):
         print(f"警告：源文件夹中的图像数量 ({total_images}) 不足 10000 张！请检查数据集是否完整解压。")
         return
         
-    # 设定随机种子以保证每次划分结果的一致性
+    # 🌟 核心修复点：必须先排序！抹平不同操作系统 os.walk 读取顺序不同的坑
+    all_images.sort()
+    
+    # 设定随机种子以保证每次划分结果的绝对一致性
     random.seed(42)
     # 打乱数据集，确保不同地貌特征均匀分布到各个集中
     random.shuffle(all_images)
     
-    # 划分列表[cite: 1]
+    # 划分列表
     train_images = all_images[:num_train]
     val_images = all_images[num_train : num_train+num_val]
     test_images = all_images[num_train+num_val : num_train+num_val+num_test]
@@ -58,7 +61,7 @@ def prepare_and_split_aid_dataset(source_base_dir, target_base_dir):
     copy_files(val_images, 'val')
     copy_files(test_images, 'test')
     
-    print("\n--- 9000/500/500 数据集扁平化与划分全部成功闭环！---")
+    print("\n--- 9000/500/500 数据集扁平化与严格随机划分全部成功闭环！---")
 
 if __name__ == "__main__":
     # AID 数据集解压在此目录（无论里面嵌套了多少层子文件夹）
@@ -70,4 +73,3 @@ if __name__ == "__main__":
         prepare_and_split_aid_dataset(raw_source, target_dir)
     else:
         print("尚未找到 raw_data 文件夹，请确保数据已经上传并解压！")
-        
