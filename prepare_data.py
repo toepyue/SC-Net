@@ -30,7 +30,7 @@ def prepare_and_split_aid_dataset(source_base_dir, target_base_dir):
         print(f"警告：源文件夹中的图像数量 ({total_images}) 不足 10000 张！请检查数据集是否完整解压。")
         return
         
-    # 🌟 核心修复点：必须先排序！抹平不同操作系统 os.walk 读取顺序不同的坑
+    # 先排序，抹平不同操作系统 os.walk 读取顺序不同的坑
     all_images.sort()
     
     # 设定随机种子以保证每次划分结果的绝对一致性

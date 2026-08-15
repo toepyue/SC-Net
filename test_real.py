@@ -19,11 +19,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"当前计算设备: {device}")
 
-    # 1. 核心配置：指定刚刚跑出来的第31轮巅峰权重
-    checkpoint_path = "./checkpoints_hard_mode/hard_mode_epoch_31.pth" 
+    # 1. 核心配置：指定刚刚跑出来的第27轮巅峰权重
+    checkpoint_path = "./checkpoints_hard_mode/hard_mode_epoch_27.pth" 
     
     source_img_path = "./real_source.jpg" 
     target_img_path = "./real_target.jpg" 
+    
+
 
     if not os.path.exists(checkpoint_path):
         print(f"找不到权重文件 {checkpoint_path}，请确认路径或文件名是否正确！")
@@ -91,14 +93,14 @@ def main():
 
     plt.subplot(1, 3, 3)
     plt.imshow(warped_source_img)
-    plt.title("SC-NetWarped Source")
+    plt.title("SC-Net Warped Source")
     plt.axis("off")
 
     # 保存图片
     save_path = "real_inference_result.png"
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=300)
-    print(f"见证奇迹时刻！结果图已成功保存至当前目录: {save_path}")
+    print(f"见证奇迹时刻，结果图已成功保存至当前目录: {save_path}")
 
 if __name__ == "__main__":
     main()

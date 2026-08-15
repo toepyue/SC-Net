@@ -21,7 +21,7 @@ class AerialImageDataset(Dataset):
     def generate_random_affine(self):
         """
         生成随机的 2x3 仿射变换矩阵
-        🌟 课程学习阶段一：Medium-Hard (中高难度大尺度形变) 🌟
+        课程学习阶段一：Medium-Hard (中高难度大尺度形变)
         """
         import random
         
@@ -53,7 +53,7 @@ class AerialImageDataset(Dataset):
         source_img = cv2.imread(img_path)
         source_img = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB) 
         
-        # 🌟 修复底层坐标系错位 Bug：先强行锁定 400x400 尺寸
+        # 修复底层坐标系错位 Bug：先强行锁定 400x400 尺寸
         source_img = cv2.resize(source_img, (400, 400))
         
         matrix_cv, matrix_norm = self.generate_random_affine()

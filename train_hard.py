@@ -34,7 +34,7 @@ def main():
     train_dataset = AerialImageDataset(image_dir="./data/train")
     train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
     
-    # 🌟 核心策略：继承 88.87% 的巅峰权重作为强大的特征提取基座
+    # 核心策略：继承 之前88.87% 的巅峰权重作为强大的特征提取基座
     model = SCNet(pretrained=False).to(device)
     checkpoint_path = "./checkpoints_finetune/finetune_epoch_7.pth"
     

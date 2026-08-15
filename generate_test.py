@@ -5,10 +5,10 @@ import numpy as np
 img = cv2.imread('real_source.jpg')
 img = cv2.resize(img, (400, 400))
 
-# 2. 设定在模型“舒适区”内的变换参数 (中高难度: 放大1.3倍，旋转30度)
-angle = -35
+# 2. 设定在模型“舒适区”内的变换参数 (中高难度: 放大1.3倍，旋转-30度)
+angle = 45
 scale = 1.3
-tx, ty = 30, -25 # 稍微平移一点
+tx, ty = 20, -25 # 稍微平移一点
 
 # 3. 生成目标图
 center = (200.0, 200.0)

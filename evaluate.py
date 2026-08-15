@@ -8,7 +8,7 @@ from dataset import AerialImageDataset
 from models.sc_net import SCNet
 
 def generate_eval_grid(batch_size, device):
-    """生成用于评估的测试网格点 (模拟遍布全图的特征点)"""
+    """生成用于评估的测试网格点"""
     step = 0.1
     x = torch.arange(-1.0, 1.0 + step, step, device=device)
     y = torch.arange(-1.0, 1.0 + step, step, device=device)
@@ -41,7 +41,7 @@ def calculate_pck(pred_theta, gt_theta, grid, tau_list=[0.1, 0.05, 0.03]):
     
     # 仅打印第一个 Batch 的误差，避免日志刷屏
     if not hasattr(calculate_pck, "has_printed"):
-        print(f"  [示例] 当前 Batch 平均预测误差距离: {distances.mean().item():.4f}, 极限阈值 sigma(0.03): {0.03 * 2.0}")
+        print(f" 当前 Batch 平均预测误差距离: {distances.mean().item():.4f}, 极限阈值 sigma(0.03): {0.03 * 2.0}")
         calculate_pck.has_printed = True
 
     pck_results = {}
@@ -54,7 +54,7 @@ def calculate_pck(pred_theta, gt_theta, grid, tau_list=[0.1, 0.05, 0.03]):
     return pck_results
 
 def evaluate():
-    print("--- 启动 SC-Net 极限边界测试 (Hard Mode) PCK 评估 ---")
+    print("--- 启动 SC-Net 极限边界测试 PCK 评估 ---")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     checkpoint_dir = "./checkpoints_hard_mode"
@@ -70,10 +70,10 @@ def evaluate():
         print(f"❌ 在 {checkpoint_dir} 中没有找到任何权重文件！")
         return
         
-    # 🌟 交互式选择器：按文件的修改时间倒序排列（最新的在最上面）
+    #  交互式选择器：按文件的修改时间倒序排列（最新的在最上面）
     pth_files.sort(key=os.path.getmtime, reverse=True)
     
-    print("\n📂 发现以下权重文件 (按生成时间由新到旧排序):")
+    print("\n 发现以下权重文件 (按生成时间由新到旧排序):")
     for idx, f in enumerate(pth_files):
         print(f"  [{idx + 1}] {os.path.basename(f)}")
         
