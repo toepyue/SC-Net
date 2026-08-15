@@ -8,6 +8,7 @@ from dataset import AerialImageDataset
 from models.sc_net import SCNet
 
 def generate_grid(batch_size, device, step=0.1):
+    """生成用于计算变换误差的标准空间坐标网格，返回齐次坐标形式 [x, y, 1]"""
     x = torch.arange(-1.0, 1.0 + step, step, device=device)
     y = torch.arange(-1.0, 1.0 + step, step, device=device)
     grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
@@ -17,9 +18,12 @@ def generate_grid(batch_size, device, step=0.1):
     return grid.unsqueeze(0).repeat(batch_size, 1, 1)
 
 def grid_distance_loss(pred_theta, gt_theta, grid):
+    """计算预测仿射矩阵与真实仿射矩阵作用于网格后的均方误差 (MSE)"""
     B = pred_theta.shape[0]
     pred_matrix = pred_theta.view(B, 2, 3)
     gt_matrix = gt_theta.view(B, 2, 3)
+    
+    # 分别计算预测和真实的扭曲网格点
     pred_points = torch.bmm(pred_matrix, grid)
     gt_points = torch.bmm(gt_matrix, grid)
     return nn.functional.mse_loss(pred_points, gt_points)
@@ -27,6 +31,7 @@ def grid_distance_loss(pred_theta, gt_theta, grid):
 def main():
     print("🔥 启动 SC-Net 课程学习: Medium-Hard 阶段 🔥")
     
+    # 1. 基础环境与数据配置
     save_dir = "./checkpoints_hard_mode"
     os.makedirs(save_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -34,7 +39,7 @@ def main():
     train_dataset = AerialImageDataset(image_dir="./data/train")
     train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
     
-    # 核心策略：继承 之前88.87% 的巅峰权重作为强大的特征提取基座
+    # 2. 核心策略：实例化模型并加载预训练的特征提取基座
     model = SCNet(pretrained=False).to(device)
     checkpoint_path = "./checkpoints_finetune/finetune_epoch_7.pth"
     
@@ -48,11 +53,14 @@ def main():
 
     model.train()
     
-    # 因为有强大的预训练基座，采用相对温和的 5e-5 初始学习率，避免破坏骨干网络
+    # 3. 配置优化器与学习率调度器
+    # 采用相对温和的 5e-5 初始学习率，避免破坏已有的骨干网络特征
     optimizer = optim.AdamW(model.parameters(), lr=0.00005)
     num_epochs = 50
+    # 使用余弦退火策略，使学习率平滑下降至 1e-6
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
     
+    # 4. 训练主循环
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         current_lr = optimizer.param_groups[0]['lr']
@@ -63,24 +71,36 @@ def main():
             target_img = target_img.to(device)
             affine_gt = affine_gt.to(device).float()
             
+            # 清空历史梯度
             optimizer.zero_grad()
+            
+            # 前向传播预测变换参数
             pred_theta = model(source_img, target_img)
             
+            # 动态生成网格并计算 Loss
             grid = generate_grid(source_img.shape[0], device)
             loss = grid_distance_loss(pred_theta, affine_gt, grid)
+            
+            # 反向传播计算梯度
             loss.backward()
             
+            # 梯度裁剪：防止大形变样本产生的异常大梯度导致模型崩溃
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # 更新模型权重
             optimizer.step()
             epoch_loss += loss.item()
             
             if (batch_idx + 1) % 100 == 0:
                 print(f"  Batch [{batch_idx+1}/{len(train_dataloader)}] | Loss: {loss.item():.6f}")
         
+        # 每个 Epoch 结束更新一次学习率
         scheduler.step()
+        
         avg_epoch_loss = epoch_loss / len(train_dataloader)
         print(f"-> Epoch [{epoch+1}/{num_epochs}] 平均 Loss: {avg_epoch_loss:.6f}")
         
+        # 5. 保存当前轮次的权重
         save_path = os.path.join(save_dir, f"hard_mode_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"已保存训练权重至: {save_path}\n" + "-"*40)
