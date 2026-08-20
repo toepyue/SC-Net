@@ -51,7 +51,7 @@ SC-Net/
 
 2. 生成目标图： 运行测试用例生成脚本（generate_test.py），程序会自动根据预设的高难度仿射变换参数，生成一张发生剧烈几何扭曲的目标图 real_target.jpg。
 
-3. 执行推理出图： 确保预训练权重（随附压缩包中的 hard_mode_epoch_27.pth）已解压并放置在指定目录，运行可视化脚本：python test_real.py。
+3. 执行推理出图： 确保预训练权重（SCNet_Demo_Weights.zip压缩包中的 hard_mode_epoch_27.pth）已解压并放置在指定目录，运行可视化脚本：python test_real.py。
    运行结束后，根目录会自动生成 real_inference_result.png，同时终端日记中也会直观展示预测仿射参数。
 
 
